@@ -42,6 +42,7 @@ _USER32.EndDeferWindowPos.argtypes = [ctypes.c_void_p]
 
 MAGIC = "#010203"          # 透明色，窗口除绘制内容外全部透明
 BG = "#1B1B1F"             # 背景层底色（透明度由“透明”滑块控制）
+BG_LUM = 27.5              # BG 的灰度亮度，用于和游戏画面混合后挑字色
 BAR_BG = "#2C2C2E"         # iOS 次级背景
 BAR_LINE = "#3A3A3C"
 TRACK = "#48484A"
@@ -75,6 +76,7 @@ class TranslateOverlay:
         self._signature = None
         self._shown = []             # 当前已显示的译文（用于识别截图里的自身回显）
         self._blocks = []            # 当前译文块的位置（同上，按坐标兜底）
+        self._painted = []           # (画布对象, 该行原始亮度)，透明度变了要重算字色
         self._draw_key = None        # 上一次绘制的译文（内容没变就不重绘，防闪烁）
         self._frame = None
         self._drag = None
@@ -474,19 +476,22 @@ class TranslateOverlay:
             return
         c = self._canvas
         c.delete("blocks")
+        self._painted = []
         win_w = self._size[0]
         for item in items:
             x, y, w, h = item["rect"]
             pad = 3
             f = self._fit_font(item["text"], w + pad * 2 - 4, h + 4)
             tw = f.measure(item["text"])
+            fg = self._text_color(item["lum"])
             if tw <= win_w - 12:
                 left = max(6, min(x + w / 2 - tw / 2, win_w - tw - 6))
-                c.create_text(left, y + h / 2, text=item["text"], fill=item["fg"],
-                              font=f, anchor="w", tags="blocks")
+                item_id = c.create_text(left, y + h / 2, text=item["text"], fill=fg,
+                                        font=f, anchor="w", tags="blocks")
             else:
-                c.create_text(win_w / 2, y + h / 2, text=item["text"], fill=item["fg"],
-                              font=f, width=max(12, win_w - 12), tags="blocks")
+                item_id = c.create_text(win_w / 2, y + h / 2, text=item["text"], fill=fg,
+                                        font=f, width=max(12, win_w - 12), tags="blocks")
+            self._painted.append((item_id, item["lum"]))
         c.tag_raise("ui")
         c.tag_lower("backdrop")
 
@@ -525,6 +530,7 @@ class TranslateOverlay:
         if d["mode"] == "alpha":
             self._alpha = value
             self._apply_alpha()
+            self._retint()
             self._set_slider("alpha_slide", value)
             return
 
@@ -629,6 +635,7 @@ class TranslateOverlay:
         self._frame = None
         self._shown = []
         self._blocks = []
+        self._painted = []
         self._draw_key = None
         self._status = "切换中…"
         self._canvas.delete("blocks")
@@ -704,8 +711,8 @@ class TranslateOverlay:
             for line, (text, _target) in zip(lines, results):
                 if not text:
                     continue
-                fg = self._swatch(image, line["rect"])
-                items.append({"rect": line["rect"], "text": text, "fg": fg})
+                lum = self._swatch(image, line["rect"])
+                items.append({"rect": line["rect"], "text": text, "lum": lum})
 
             targets = {t for _text, t in results if t}
             if not items:
@@ -790,7 +797,7 @@ class TranslateOverlay:
 
     @staticmethod
     def _swatch(image, rect):
-        """按文字行上下边缘的亮度挑字色，不画底色时译文也能看清。"""
+        """取文字行上下边缘的平均亮度，用来决定译文字色。"""
         x, y, w, h = (int(v) for v in rect)
         samples = []
         for y1, y2 in ((y - 6, y - 1), (y + h + 1, y + h + 6)):
@@ -806,8 +813,27 @@ class TranslateOverlay:
             rgb = (int(sum(p[0] for p in samples) / n),
                    int(sum(p[1] for p in samples) / n),
                    int(sum(p[2] for p in samples) / n))
-        lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
-        return DARK_TEXT if lum > 140 else FG
+        return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+
+    def _text_color(self, lum):
+        """按「悬浮窗底色叠加后的实际亮度」选字色，保证和当前底色有对比度。
+
+        背景层是 BG 色、透明度随滑块变化，所以要把两者按 alpha 混合后再判断：
+        不透明度拉满时底色恒为深色，用白字；接近全透明时跟随游戏画面亮度。
+        """
+        alpha = self._alpha / 100
+        effective = BG_LUM * alpha + lum * (1 - alpha)
+        return DARK_TEXT if effective >= 115 else FG
+
+    def _retint(self):
+        """透明度变化后立刻重算已显示译文的字色。"""
+        if self._closed:
+            return
+        for item_id, lum in self._painted:
+            try:
+                self._canvas.itemconfigure(item_id, fill=self._text_color(lum))
+            except tk.TclError:
+                pass
 
     # ---------- 关闭 ----------
     def close(self):
