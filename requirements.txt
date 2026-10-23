@@ -1,0 +1,5 @@
+pillow>=10.0
+numpy>=1.24
+requests>=2.31
+rapidocr-onnxruntime>=1.2
+Pinyin2Hanzi>=0.1.1
