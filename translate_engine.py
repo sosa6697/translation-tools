@@ -59,14 +59,14 @@ class Translator:
             self._local.session = session
         return session
 
-    def translate(self, text, target):
+    def translate(self, text, target, caps=False, lenient=False):
         """target: 'zh' 或 'en'。返回译文（网络用语会先做同语言改写）。"""
-        key = (target, text)
+        key = (target, caps, lenient, text)
         if key in self._cache:
             return self._cache[key]
 
         source = text
-        if looks_like_pinyin(text):
+        if looks_like_pinyin(text, caps=caps, lenient=lenient):
             hanzi = to_hanzi(text)
             if hanzi and target == "zh":
                 # 拼音直接还原成汉字显示，不再送去机器翻译
@@ -87,6 +87,10 @@ class Translator:
 
         if not result:
             raise TranslateError("翻译失败")
+        if (target == "zh" and not _CJK.search(result) and result != source
+                and any(ch.isalpha() for ch in result)):
+            # 小语种偶发返回英文：把结果再翻一次，保证输出是中文
+            result = self._retry_chinese(result) or result
         self._cache[key] = result
         if len(self._cache) > 500:
             self._cache.clear()
@@ -95,15 +99,20 @@ class Translator:
     def translate_lines(self, texts, mode="auto"):
         """逐行自动判断语言并翻译，返回 [(译文, 目标语言)]。
 
-        mode="auto"：只翻译非中文（含拼音），中文行原样保留；
-        mode="zh_en"：只翻译中文（含拼音）为英文，其他语言原样保留。
+        mode="auto"：外语转中文，拼音行与中文行原样保留；
+        mode="pinyin"：只把拼音还原成中文（大小写均可），其他行原样保留；
+        mode="zh_en"：只翻译中文（含拼音还原后）为英文，其他语言原样保留。
         跳过或翻译失败的行返回空字符串。
         """
+        caps = mode == "pinyin"
+        lenient = mode == "pinyin"
         targets = []
         for text in texts:
-            pinyin = looks_like_pinyin(text)
-            if pinyin or detect_lang(text) == "zh":
-                targets.append("en" if mode == "zh_en" else ("zh" if pinyin else None))
+            pinyin = looks_like_pinyin(text, caps=caps, lenient=lenient)
+            if mode == "pinyin":
+                targets.append("zh" if pinyin else None)
+            elif pinyin or detect_lang(text) == "zh":
+                targets.append("en" if mode == "zh_en" else None)
             else:
                 targets.append("zh" if mode != "zh_en" else None)
 
@@ -114,11 +123,11 @@ class Translator:
 
         def job(key):
             text, target = key
-            cached = self._cache.get(key)
+            cached = self._cache.get((target, caps, lenient, text))
             if cached:
                 return key, cached
             try:
-                return key, self.translate(text, target)
+                return key, self.translate(text, target, caps=caps, lenient=lenient)
             except TranslateError:
                 return key, ""
 
@@ -130,6 +139,17 @@ class Translator:
 
         return [(results.get((text, target), "") if target else "", target)
                 for text, target in zip(texts, targets)]
+
+    def _retry_chinese(self, text):
+        """英文兜底结果再翻成中文；仍然没有中文就返回 None。"""
+        for engine in (self._tencent, self._mymemory):
+            try:
+                out = engine(text, "zh")
+            except Exception:
+                out = None
+            if out and _CJK.search(out):
+                return out
+        return None
 
     def _tencent(self, text, target):
         body = {

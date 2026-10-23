@@ -13,6 +13,7 @@ import threading
 import tkinter as tk
 from tkinter import font as tkfont
 
+import numpy as np
 from PIL import ImageGrab
 
 from ocr_engine import OcrError, ScreenOcr
@@ -61,6 +62,8 @@ DEFAULT_W, DEFAULT_H = 620, 300
 MIN_W, MIN_H = 320, 160
 DEFAULT_ALPHA = 85          # 0-100，100 为完全不透明
 INTERVAL_MS = 900
+FRAME_SIZE = (64, 40)       # 画面比对用的缩略图尺寸
+FRAME_DELTA = 16            # 灰度差超过该值才算画面变化
 
 
 class TranslateOverlay:
@@ -70,12 +73,16 @@ class TranslateOverlay:
         self._closed = False
         self._busy = False
         self._signature = None
+        self._shown = []             # 当前已显示的译文（用于识别截图里的自身回显）
+        self._blocks = []            # 当前译文块的位置（同上，按坐标兜底）
+        self._draw_key = None        # 上一次绘制的译文（内容没变就不重绘，防闪烁）
+        self._frame = None
         self._drag = None
         self._pinned = True
         self._status = "准备中…"
         self._fonts = {}
         self._alpha = DEFAULT_ALPHA
-        self._mode = "auto"          # auto: 外语→中；zh_en: 中→英
+        self._mode = "auto"          # auto: 外语→中；pinyin: 拼音→中；zh_en: 中→英
         self._sliders = {}
         self._slider_items = {}
         self._size = (DEFAULT_W, DEFAULT_H)
@@ -415,26 +422,32 @@ class TranslateOverlay:
         c.create_text(sw_x - 8, 27, text="置顶", anchor="e", fill=BAR_TEXT,
                       font=self._font(8), tags=("ui", "barbg", "pin"))
 
-        # 翻译方向：外语→中 / 中→英
-        mx2 = sw_x - 34
-        mx1 = mx2 - 78
-        active = self._mode == "zh_en"
-        self._round_rect(mx1, 16, mx2, 38, 11,
-                         fill=ACCENT if active else PILL, outline="",
-                         tags=("ui", "barbg", "mode"))
-        c.create_text((mx1 + mx2) / 2, 27,
-                      text="中 → 英" if active else "外语 → 中",
-                      fill=FG, font=self._font(8), tags=("ui", "barbg", "mode"))
+        # 翻译方向：外语→中 / 拼音→中 / 中→英
+        labels = (("auto", "外语→中"), ("pinyin", "拼音→中"), ("zh_en", "中→英"))
+        f8 = self._font(8)
+        widths = [f8.measure(text) + 14 for _tag, text in labels]
+        mode_right = sw_x - 34
+        mode_left = mode_right - (sum(widths) + 4 * (len(labels) - 1))
+        x = mode_left
+        for (tag, text), seg_w in zip(labels, widths):
+            self._round_rect(x, 16, x + seg_w, 38, 11,
+                             fill=ACCENT if self._mode == tag else PILL, outline="",
+                             tags=("ui", "barbg", "mode", f"mode_{tag}"))
+            c.create_text(x + seg_w / 2, 27, text=text, fill=FG, font=f8,
+                          tags=("ui", "barbg", "mode", f"mode_{tag}"))
+            x += seg_w + 4
 
-        # 状态：指示灯常亮
-        c.create_oval(20, 22, 30, 32, fill=GREEN, outline="",
-                      tags=("ui", "barbg", "led"))
-        limit = max(6, int((mx1 - 50) / 15))
-        status = self._status
-        if len(status) > limit:
-            status = status[:limit - 1] + "…"
-        c.create_text(40, 27, text=status, anchor="w", fill=FG,
-                      font=self._font(10), tags=("ui", "barbg"))
+        # 状态：指示灯常亮（窗口过窄时让位给模式按钮）
+        if mode_left >= 50:
+            c.create_oval(20, 22, 30, 32, fill=GREEN, outline="",
+                          tags=("ui", "barbg", "led"))
+        limit = int((mode_left - 50) / 15)
+        if limit >= 4:
+            status = self._status
+            if len(status) > limit:
+                status = status[:limit - 1] + "…"
+            c.create_text(40, 27, text=status, anchor="w", fill=FG,
+                          font=self._font(10), tags=("ui", "barbg"))
 
         # 两行滑块
         gap = 18
@@ -465,9 +478,6 @@ class TranslateOverlay:
         for item in items:
             x, y, w, h = item["rect"]
             pad = 3
-            self._round_rect(x - pad, y - 2, x + w + pad, y + h + 2,
-                             min(8, (h + 4) / 2), fill=item["fill"], outline="",
-                             tags="blocks")
             f = self._fit_font(item["text"], w + pad * 2 - 4, h + 4)
             tw = f.measure(item["text"])
             if tw <= win_w - 12:
@@ -541,7 +551,10 @@ class TranslateOverlay:
             self._toggle_pin()
             return True
         if "mode" in tags:
-            self._toggle_mode()
+            for tag in ("mode_auto", "mode_pinyin", "mode_zh_en"):
+                if tag in tags:
+                    self._set_mode(tag[5:])
+                    break
             return True
         if "size_slide" in tags or "alpha_slide" in tags:
             self._begin_slider("size" if "size_slide" in tags else "alpha", event)
@@ -608,9 +621,15 @@ class TranslateOverlay:
             cursor = ""
         self._canvas.configure(cursor=cursor)
 
-    def _toggle_mode(self):
-        self._mode = "zh_en" if self._mode == "auto" else "auto"
+    def _set_mode(self, mode):
+        if self._mode == mode:
+            return
+        self._mode = mode
         self._signature = None
+        self._frame = None
+        self._shown = []
+        self._blocks = []
+        self._draw_key = None
         self._status = "切换中…"
         self._canvas.delete("blocks")
         self._draw_ui(*self._size)
@@ -632,50 +651,76 @@ class TranslateOverlay:
             threading.Thread(target=self._work, args=(self._win_rect(),), daemon=True).start()
         self._win.after(INTERVAL_MS, self._tick)
 
+    def _frame_changed(self, image):
+        """缩略图对比：画面基本没动时跳过 OCR，避免持续占用 CPU。"""
+        view = np.asarray(image.convert("L").resize(FRAME_SIZE), dtype=np.int16)
+        last = self._frame
+        self._frame = view
+        if last is None or last.shape != view.shape:
+            return True
+        changed = int((np.abs(view - last) > FRAME_DELTA).sum())
+        return changed > view.size // 400
+
     def _work(self, bbox):
         try:
             image = ImageGrab.grab(bbox=bbox, all_screens=True)
+            if not self._frame_changed(image):
+                return
             lines = []
+            echoed = False
             for line in self._ocr.recognize_lines(image):
                 text = clean_text(line["text"])
-                if text and line["w"] > 4 and line["h"] > 4:
-                    lines.append({"rect": (line["x"], line["y"], line["w"], line["h"]), "text": text})
+                if not text or line["w"] <= 4 or line["h"] <= 4:
+                    continue
+                if line["y"] < BAR_H:
+                    # 工具条区域被自己的界面遮住，忽略这部分识别结果
+                    continue
+                if self._is_echo(text) or self._echo_at(text, line):
+                    echoed = True
+                    continue
+                lines.append({"rect": (line["x"], line["y"], line["w"], line["h"]), "text": text})
 
             if not lines:
+                if echoed:
+                    # 画面里只剩自己刚显示的译文，保持现有结果，避免闪一下就清屏
+                    return
                 self._signature = None
                 self._ui(self._apply, None, [], "未识别到文字")
                 return
 
-            signature = tuple((self._mode, round(l["rect"][0]), round(l["rect"][1]), l["text"])
-                              for l in lines)
+            signature = (self._mode, tuple(l["text"] for l in lines))
             if signature == self._signature:
                 return
 
             try:
-                results = self._translator.translate_lines([l["text"] for l in lines], self._mode)
+                results = self._translator.translate_lines(
+                    [l["text"] for l in lines], self._mode)
             except TranslateError:
-                self._ui(self._apply, None, [], "翻译失败")
+                if not echoed:
+                    self._ui(self._apply, None, [], "翻译失败")
                 return
 
             items = []
             for line, (text, _target) in zip(lines, results):
                 if not text:
                     continue
-                fill, fg = self._swatch(image, line["rect"])
-                items.append({"rect": line["rect"], "text": text, "fill": fill, "fg": fg})
+                fg = self._swatch(image, line["rect"])
+                items.append({"rect": line["rect"], "text": text, "fg": fg})
 
             targets = {t for _text, t in results if t}
             if not items:
+                if echoed:
+                    return
                 status = "无可翻译文字" if not targets else "翻译失败"
                 self._ui(self._apply, None, [], status)
                 return
 
-            if targets == {"en"}:
+            if self._mode == "pinyin":
+                status = "拼音 → 中文"
+            elif self._mode == "zh_en":
                 status = "中 → 英"
-            elif len(targets) == 1:
-                status = "→ 中文"
             else:
-                status = "多语言 → 中文"
+                status = "→ 中文"
 
             self._signature = signature
             self._ui(self._apply, signature, items, status)
@@ -691,9 +736,50 @@ class TranslateOverlay:
             return
         if signature is None:
             self._signature = None
+        # OCR 每轮的行坐标会有 1–2px 抖动，坐标按 8px 取整后再比对，
+        # 内容没变就完全不重绘，避免删除/重建造成的闪烁
+        key = tuple((item["text"], round(item["rect"][0] / 8),
+                     round(item["rect"][1] / 8)) for item in items)
+        if key != self._draw_key:
+            self._draw_key = key
+            self._draw_blocks(items)
+            self._shown = [self._norm_text(item["text"]) for item in items]
+            self._blocks = [item["rect"] for item in items]
+        elif status == self._status:
+            return
         self._status = status
-        self._draw_blocks(items)
         self._draw_ui(*self._size)
+
+    @staticmethod
+    def _norm_text(text):
+        return "".join(ch for ch in text.lower() if ch.isalnum())
+
+    def _is_echo(self, text):
+        """截图里读到自己刚画的译文时忽略，避免把译文当成原文再识别一遍。"""
+        if not self._shown:
+            return False
+        value = self._norm_text(text)
+        if len(value) < 2:
+            return False
+        for shown in self._shown:
+            if value == shown or (len(shown) >= 2 and (value in shown or shown in value)):
+                return True
+        return False
+
+    def _echo_at(self, text, line):
+        """译文块所在位置读到的文字：按语种判断是不是自己画的译文。
+
+        OCR 对自身译文偶尔会读错一两个字，文本比对会漏掉，这里按位置兜底：
+        外语/拼音模式下这块位置显示的只能是中文，「中→英」下只能是英文。
+        """
+        if not self._blocks:
+            return False
+        cjk = any("\u4e00" <= ch <= "\u9fff" for ch in text)
+        for bx, by, bw, bh in self._blocks:
+            if (bx - 6 <= line["x"] <= bx + bw + 6
+                    and by - 6 <= line["y"] <= by + bh + 6):
+                return (not cjk) if self._mode == "zh_en" else cjk
+        return False
 
     def _ui(self, func, *args):
         if not self._closed:
@@ -704,7 +790,7 @@ class TranslateOverlay:
 
     @staticmethod
     def _swatch(image, rect):
-        """取文字行上下边缘的平均色作为背景填充，让译文看起来是"原位替换"。"""
+        """按文字行上下边缘的亮度挑字色，不画底色时译文也能看清。"""
         x, y, w, h = (int(v) for v in rect)
         samples = []
         for y1, y2 in ((y - 6, y - 1), (y + h + 1, y + h + 6)):
@@ -720,11 +806,8 @@ class TranslateOverlay:
             rgb = (int(sum(p[0] for p in samples) / n),
                    int(sum(p[1] for p in samples) / n),
                    int(sum(p[2] for p in samples) / n))
-        if abs(rgb[0] - 1) <= 3 and abs(rgb[1] - 2) <= 3 and abs(rgb[2] - 3) <= 3:
-            rgb = (18, 20, 26)
         lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
-        fill = "#%02X%02X%02X" % rgb
-        return fill, (DARK_TEXT if lum > 140 else FG)
+        return DARK_TEXT if lum > 140 else FG
 
     # ---------- 关闭 ----------
     def close(self):
