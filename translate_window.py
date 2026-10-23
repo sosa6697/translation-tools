@@ -62,7 +62,7 @@ BAR_ALPHA = 0.6             # 工具条底色：40% 透明（不透明度 60%）
 DEFAULT_W, DEFAULT_H = 620, 300
 MIN_W, MIN_H = 320, 160
 DEFAULT_ALPHA = 85          # 0-100，100 为完全不透明
-INTERVAL_MS = 900
+INTERVAL_MS = 1000         # 默认截图间隔，可用「间隔」滑块在 1–10 秒之间调整
 FRAME_SIZE = (64, 40)       # 画面比对用的缩略图尺寸
 FRAME_DELTA = 16            # 灰度差超过该值才算画面变化
 
@@ -81,6 +81,8 @@ class TranslateOverlay:
         self._frame = None
         self._drag = None
         self._pinned = True
+        self._paused = False          # 暂停后不再截图/识别，直到点「继续」
+        self._interval_ms = INTERVAL_MS
         self._status = "准备中…"
         self._fonts = {}
         self._alpha = DEFAULT_ALPHA
@@ -318,7 +320,8 @@ class TranslateOverlay:
             return
         tags = self._hit_tags(event.x, event.y)
         control = any(t in tags for t in
-                      ("close", "pin", "mode", "size_slide", "alpha_slide"))
+                      ("close", "pin", "pause", "mode",
+                       "size_slide", "alpha_slide", "rate_slide"))
         self._bar_canvas.configure(cursor="hand2" if control else "fleur")
 
     def _raise_main(self):
@@ -361,7 +364,7 @@ class TranslateOverlay:
         c.create_oval(kx - 9, y + 2, kx + 9, y + h - 2, fill=FG, outline="",
                       tags=("ui", "barbg", "pin"))
 
-    def _draw_slider(self, tag, label, x, y, width, value):
+    def _draw_slider(self, tag, label, x, y, width, value, text=None):
         c = self._canvas
         value = int(value)
         c.create_text(x, y, text=label, anchor="w", fill=BAR_TEXT,
@@ -376,13 +379,13 @@ class TranslateOverlay:
                                 tags=("ui", "barbg", tag))
         knob = c.create_oval(kx - 7, y - 7, kx + 7, y + 7, fill=FG, outline="",
                              tags=("ui", "barbg", tag))
-        pct = c.create_text(x + width, y, text=f"{value}%", anchor="e", fill=FG,
+        pct = c.create_text(x + width, y, text=text or f"{value}%", anchor="e", fill=FG,
                             font=self._font(9), tags=("ui", "barbg", tag))
         self._sliders[tag] = (x1, x2)
         self._slider_items[tag] = {"y": y, "x1": x1, "x2": x2,
                                    "fill": fill, "knob": knob, "pct": pct}
 
-    def _set_slider(self, tag, value):
+    def _set_slider(self, tag, value, text=None):
         """拖动时只挪滑块图形，不整体重绘。"""
         items = self._slider_items.get(tag)
         if not items:
@@ -393,7 +396,15 @@ class TranslateOverlay:
         self._canvas.coords(items["fill"],
                             *self._round_pts(x1, y - 2, max(x1 + 1, kx), y + 2, 2))
         self._canvas.coords(items["knob"], kx - 7, y - 7, kx + 7, y + 7)
-        self._canvas.itemconfigure(items["pct"], text=f"{value}%")
+        self._canvas.itemconfigure(items["pct"], text=text or f"{value}%")
+
+    def _rate_value(self):
+        """截图间隔（秒）换算成 0–100 的滑块位置。"""
+        seconds = max(1, min(10, round(self._interval_ms / 1000)))
+        return round((seconds - 1) / 9 * 100)
+
+    def _rate_text(self):
+        return f"{max(1, min(10, round(self._interval_ms / 1000)))}s"
 
     def _draw_ui(self, w=None, h=None):
         if self._closed:
@@ -428,8 +439,22 @@ class TranslateOverlay:
         labels = (("auto", "外语→中"), ("pinyin", "拼音→中"), ("zh_en", "中→英"))
         f8 = self._font(8)
         widths = [f8.measure(text) + 14 for _tag, text in labels]
+        mode_width = sum(widths) + 4 * (len(labels) - 1)
         mode_right = sw_x - 34
-        mode_left = mode_right - (sum(widths) + 4 * (len(labels) - 1))
+
+        # 暂停 / 继续：点击后停止截图与识别（窗口过窄时让位给模式按钮）
+        pause_w = f8.measure("暂停") + 14
+        pause_x = sw_x - 28 - pause_w
+        if pause_x >= 46 and pause_x - 10 - mode_width >= 6:
+            self._round_rect(pause_x, 16, pause_x + pause_w, 38, 11,
+                             fill=ACCENT if self._paused else PILL, outline="",
+                             tags=("ui", "barbg", "pause"))
+            c.create_text(pause_x + pause_w / 2, 27,
+                          text="继续" if self._paused else "暂停", fill=FG,
+                          font=f8, tags=("ui", "barbg", "pause"))
+            mode_right = pause_x - 10
+
+        mode_left = mode_right - mode_width
         x = mode_left
         for (tag, text), seg_w in zip(labels, widths):
             self._round_rect(x, 16, x + seg_w, 38, 11,
@@ -451,13 +476,15 @@ class TranslateOverlay:
             c.create_text(40, 27, text=status, anchor="w", fill=FG,
                           font=self._font(10), tags=("ui", "barbg"))
 
-        # 两行滑块
+        # 三个滑块：大小 / 透明 / 截图间隔
         gap = 18
-        group_w = max(120, (w - 32 - gap) / 2)
+        group_w = max(96, (w - 32 - gap * 2) / 3)
         self._sliders = {}
         self._slider_items = {}
         self._draw_slider("size_slide", "大小", 18, 62, group_w, self._size_pct())
         self._draw_slider("alpha_slide", "透明", 18 + group_w + gap, 62, group_w, self._alpha)
+        self._draw_slider("rate_slide", "间隔", 18 + (group_w + gap) * 2, 62, group_w,
+                          self._rate_value(), text=self._rate_text())
 
         # 边缘抓手：右边缘只调宽、下边缘只调高、右下角同时调
         self._round_rect(w - 8, h / 2 - 26, w - 3, h / 2 + 26, 2, fill=GRIP,
@@ -508,13 +535,16 @@ class TranslateOverlay:
                       "gx": x, "gy": y, "w": w, "h": h}
 
     def _begin_slider(self, mode, event):
+        tags = {"size": "size_slide", "alpha": "alpha_slide", "rate": "rate_slide"}
+        values = {"size": self._size_pct(), "alpha": self._alpha,
+                  "rate": self._rate_value()}
         self._drag = {
             "mode": mode,
             "base_w": self._size[0],
             "base_h": self._size[1],
-            "value": self._size_pct() if mode == "size" else self._alpha,
+            "value": values[mode],
         }
-        tag = "size_slide" if mode == "size" else "alpha_slide"
+        tag = tags[mode]
         bounds = self._sliders.get(tag)
         if bounds:
             # 轨道固定为按下时的屏幕坐标，窗口变大时不会来回跳
@@ -540,6 +570,12 @@ class TranslateOverlay:
             self._set_slider("alpha_slide", value)
             return
 
+        if d["mode"] == "rate":
+            seconds = max(1, min(10, round(1 + value * 9 / 100)))
+            self._interval_ms = seconds * 1000
+            self._set_slider("rate_slide", value, f"{seconds}s")
+            return
+
         sw = max(MIN_W + 1, self.root.winfo_screenwidth())
         target_w = max(MIN_W, round(MIN_W + (sw - MIN_W) * value / 100))
         ratio = d["base_h"] / max(1, d["base_w"])
@@ -562,14 +598,24 @@ class TranslateOverlay:
         if "pin" in tags:
             self._toggle_pin()
             return True
+        if "pause" in tags:
+            self._toggle_pause()
+            return True
         if "mode" in tags:
             for tag in ("mode_auto", "mode_pinyin", "mode_zh_en"):
                 if tag in tags:
                     self._set_mode(tag[5:])
                     break
             return True
-        if "size_slide" in tags or "alpha_slide" in tags:
-            self._begin_slider("size" if "size_slide" in tags else "alpha", event)
+        if ("size_slide" in tags or "alpha_slide" in tags
+                or "rate_slide" in tags):
+            if "size_slide" in tags:
+                mode = "size"
+            elif "alpha_slide" in tags:
+                mode = "alpha"
+            else:
+                mode = "rate"
+            self._begin_slider(mode, event)
             return True
 
         x, y = event.x, event.y
@@ -594,7 +640,7 @@ class TranslateOverlay:
         if not self._drag or self._closed:
             return
         d = self._drag
-        if d["mode"] in ("size", "alpha"):
+        if d["mode"] in ("size", "alpha", "rate"):
             self._drag_slider(event.x_root)
             return
         dx, dy = event.x_root - d["x"], event.y_root - d["y"]
@@ -621,7 +667,8 @@ class TranslateOverlay:
         x, y = event.x, event.y
         w, h = self._size
         if any(t in tags for t in
-               ("close", "pin", "mode", "size_slide", "alpha_slide")):
+               ("close", "pin", "pause", "mode",
+                "size_slide", "alpha_slide", "rate_slide")):
             cursor = "hand2"
         elif "knob" in tags or (x >= w - 10 and y >= h - 10):
             cursor = "size_nw_se"
@@ -655,14 +702,25 @@ class TranslateOverlay:
             self._win.lift()
         self._draw_ui(*self._size)
 
+    def _toggle_pause(self):
+        """暂停：停止截图与识别，画面保持当前译文；继续后重新识别一轮。"""
+        self._paused = not self._paused
+        if self._paused:
+            self._status = "已暂停"
+        else:
+            self._signature = None
+            self._frame = None
+            self._status = "恢复中…"
+        self._draw_ui(*self._size)
+
     # ---------- 自动识别 + 翻译 ----------
     def _tick(self):
         if self._closed:
             return
-        if not self._busy:
+        if not self._paused and not self._busy:
             self._busy = True
             threading.Thread(target=self._work, args=(self._win_rect(),), daemon=True).start()
-        self._win.after(INTERVAL_MS, self._tick)
+        self._win.after(self._interval_ms, self._tick)
 
     def _frame_changed(self, image):
         """缩略图对比：画面基本没动时跳过 OCR，避免持续占用 CPU。"""
@@ -745,7 +803,7 @@ class TranslateOverlay:
             self._busy = False
 
     def _apply(self, signature, items, status):
-        if self._closed:
+        if self._closed or self._paused:
             return
         if signature is None:
             self._signature = None
