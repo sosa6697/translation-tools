@@ -99,6 +99,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
+也可以直接双击 `exe/轻工具.exe` 运行，免安装 Python（单文件约 110 MB，首次启动需解包，稍慢几秒）。
+
 启动器只有一个入口：点击「翻译模式」，悬浮窗出现后即可拖动到游戏聊天框上。
 
 ## 使用说明
