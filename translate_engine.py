@@ -66,9 +66,15 @@ class Translator:
             return self._cache[key]
 
         source = text
-        if target == "en" and looks_like_pinyin(text):
-            # 屏幕上是拼音时先还原成汉字，再按中文译成英文
-            source = to_hanzi(text) or text
+        if looks_like_pinyin(text):
+            hanzi = to_hanzi(text)
+            if hanzi and target == "zh":
+                # 拼音直接还原成汉字显示，不再送去机器翻译
+                self._cache[key] = hanzi
+                if len(self._cache) > 500:
+                    self._cache.clear()
+                return hanzi
+            source = hanzi or text
         source = normalize(source, target)
         try:
             result = self._tencent(source, target)
@@ -86,17 +92,25 @@ class Translator:
             self._cache.clear()
         return result
 
-    def translate_lines(self, texts):
+    def translate_lines(self, texts, mode="auto"):
         """逐行自动判断语言并翻译，返回 [(译文, 目标语言)]。
 
-        中文行译成英文，其他语言（含英/德/法/土/西等）一律译成中文。
+        mode="auto"：只翻译非中文（含拼音），中文行原样保留；
+        mode="zh_en"：只翻译中文（含拼音）为英文，其他语言原样保留。
+        跳过或翻译失败的行返回空字符串。
         """
-        targets = ["en" if detect_lang(t) == "zh" or looks_like_pinyin(t) else "zh"
-                   for t in texts]
+        targets = []
+        for text in texts:
+            pinyin = looks_like_pinyin(text)
+            if pinyin or detect_lang(text) == "zh":
+                targets.append("en" if mode == "zh_en" else ("zh" if pinyin else None))
+            else:
+                targets.append("zh" if mode != "zh_en" else None)
 
         unique = {}
         for text, target in zip(texts, targets):
-            unique.setdefault((text, target), text)
+            if target:
+                unique.setdefault((text, target), text)
 
         def job(key):
             text, target = key
@@ -114,7 +128,8 @@ class Translator:
                 for key, out in pool.map(job, list(unique)):
                     results[key] = out
 
-        return [(results.get((text, target), ""), target) for text, target in zip(texts, targets)]
+        return [(results.get((text, target), "") if target else "", target)
+                for text, target in zip(texts, targets)]
 
     def _tencent(self, text, target):
         body = {

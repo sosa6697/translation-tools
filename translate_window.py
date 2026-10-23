@@ -75,6 +75,7 @@ class TranslateOverlay:
         self._status = "准备中…"
         self._fonts = {}
         self._alpha = DEFAULT_ALPHA
+        self._mode = "auto"          # auto: 外语→中；zh_en: 中→英
         self._sliders = {}
         self._slider_items = {}
         self._size = (DEFAULT_W, DEFAULT_H)
@@ -307,7 +308,8 @@ class TranslateOverlay:
         if self._drag or self._closed:
             return
         tags = self._hit_tags(event.x, event.y)
-        control = any(t in tags for t in ("close", "pin", "size_slide", "alpha_slide"))
+        control = any(t in tags for t in
+                      ("close", "pin", "mode", "size_slide", "alpha_slide"))
         self._bar_canvas.configure(cursor="hand2" if control else "fleur")
 
     def _raise_main(self):
@@ -413,10 +415,21 @@ class TranslateOverlay:
         c.create_text(sw_x - 8, 27, text="置顶", anchor="e", fill=BAR_TEXT,
                       font=self._font(8), tags=("ui", "barbg", "pin"))
 
-        # 状态
-        c.create_oval(20, 22, 30, 32, fill=GREEN if self._busy else ACCENT,
-                      outline="", tags=("ui", "barbg", "led"))
-        limit = max(6, int((sw_x - 48) / 15))
+        # 翻译方向：外语→中 / 中→英
+        mx2 = sw_x - 34
+        mx1 = mx2 - 78
+        active = self._mode == "zh_en"
+        self._round_rect(mx1, 16, mx2, 38, 11,
+                         fill=ACCENT if active else PILL, outline="",
+                         tags=("ui", "barbg", "mode"))
+        c.create_text((mx1 + mx2) / 2, 27,
+                      text="中 → 英" if active else "外语 → 中",
+                      fill=FG, font=self._font(8), tags=("ui", "barbg", "mode"))
+
+        # 状态：指示灯常亮
+        c.create_oval(20, 22, 30, 32, fill=GREEN, outline="",
+                      tags=("ui", "barbg", "led"))
+        limit = max(6, int((mx1 - 50) / 15))
         status = self._status
         if len(status) > limit:
             status = status[:limit - 1] + "…"
@@ -527,6 +540,9 @@ class TranslateOverlay:
         if "pin" in tags:
             self._toggle_pin()
             return True
+        if "mode" in tags:
+            self._toggle_mode()
+            return True
         if "size_slide" in tags or "alpha_slide" in tags:
             self._begin_slider("size" if "size_slide" in tags else "alpha", event)
             return True
@@ -579,7 +595,8 @@ class TranslateOverlay:
         tags = self._canvas.gettags("current")
         x, y = event.x, event.y
         w, h = self._size
-        if any(t in tags for t in ("close", "pin", "size_slide", "alpha_slide")):
+        if any(t in tags for t in
+               ("close", "pin", "mode", "size_slide", "alpha_slide")):
             cursor = "hand2"
         elif "knob" in tags or (x >= w - 10 and y >= h - 10):
             cursor = "size_nw_se"
@@ -590,6 +607,13 @@ class TranslateOverlay:
         else:
             cursor = ""
         self._canvas.configure(cursor=cursor)
+
+    def _toggle_mode(self):
+        self._mode = "zh_en" if self._mode == "auto" else "auto"
+        self._signature = None
+        self._status = "切换中…"
+        self._canvas.delete("blocks")
+        self._draw_ui(*self._size)
 
     def _toggle_pin(self):
         self._pinned = not self._pinned
@@ -622,12 +646,13 @@ class TranslateOverlay:
                 self._ui(self._apply, None, [], "未识别到文字")
                 return
 
-            signature = tuple((round(l["rect"][0]), round(l["rect"][1]), l["text"]) for l in lines)
+            signature = tuple((self._mode, round(l["rect"][0]), round(l["rect"][1]), l["text"])
+                              for l in lines)
             if signature == self._signature:
                 return
 
             try:
-                results = self._translator.translate_lines([l["text"] for l in lines])
+                results = self._translator.translate_lines([l["text"] for l in lines], self._mode)
             except TranslateError:
                 self._ui(self._apply, None, [], "翻译失败")
                 return
@@ -639,11 +664,12 @@ class TranslateOverlay:
                 fill, fg = self._swatch(image, line["rect"])
                 items.append({"rect": line["rect"], "text": text, "fill": fill, "fg": fg})
 
+            targets = {t for _text, t in results if t}
             if not items:
-                self._ui(self._apply, None, [], "翻译失败")
+                status = "无可翻译文字" if not targets else "翻译失败"
+                self._ui(self._apply, None, [], status)
                 return
 
-            targets = {t for _text, t in results}
             if targets == {"en"}:
                 status = "中 → 英"
             elif len(targets) == 1:
