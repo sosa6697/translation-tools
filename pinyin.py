@@ -22,7 +22,7 @@ _EN_WORDS = {
     "race", "base", "case", "gate", "late", "date", "rate", "page", "made",
     "side", "rule", "open", "one", "human", "woman", "women", "banana",
     "camera", "mango", "tango", "panda", "china", "fine", "mine", "dine",
-    "more", "core", "time", "home",
+    "more", "core", "time", "home", "lose", "nose", "rose", "pose", "lens",
     "the", "is", "are", "was", "were", "be", "been", "to", "of", "and",
     "or", "but", "in", "on", "at", "it", "this", "that", "these", "those",
     "for", "with", "from", "by", "as", "not", "no", "yes", "do", "does",

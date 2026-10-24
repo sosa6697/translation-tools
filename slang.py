@@ -44,6 +44,13 @@ _LATIN_RAW = [
     (r"\bglazing\b", "overpraising", re.I),
     (r"\byapping\b", "talking too much", re.I),
     (r"\bwe'?re\s+cooked\b", "we are in trouble", re.I),
+    (r"\bgg\s+wp\b", "well done", re.I),
+    (r"\bgg\b", "well done", re.I),
+    (r"\bwp\b", "well done", re.I),
+    (r"\bgj\b", "well done", re.I),
+    (r"\bpush(?:ing)?\b", "advance", re.I),
+    (r"\bfall\s+back\b", "retreat", re.I),
+    (r"\bez\b", "easy", re.I),
 
     # 土耳其语
     (r"^\s*am[kq]\b", "Lanet olsun,", re.I),

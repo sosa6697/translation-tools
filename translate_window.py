@@ -63,8 +63,8 @@ DEFAULT_W, DEFAULT_H = 620, 300
 MIN_W, MIN_H = 320, 160
 DEFAULT_ALPHA = 85          # 0-100，100 为完全不透明
 INTERVAL_MS = 1000         # 默认截图间隔，可用「间隔」滑块在 1–10 秒之间调整
-FRAME_SIZE = (64, 40)       # 画面比对用的缩略图尺寸
-FRAME_DELTA = 16            # 灰度差超过该值才算画面变化
+FRAME_SIZE = (96, 60)       # 画面比对用的缩略图尺寸（够细，才能发现新冒出来的一行小字）
+FRAME_DELTA = 8             # 灰度差超过该值算变化像素
 
 
 class TranslateOverlay:
@@ -730,7 +730,7 @@ class TranslateOverlay:
         if last is None or last.shape != view.shape:
             return True
         changed = int((np.abs(view - last) > FRAME_DELTA).sum())
-        return changed > view.size // 400
+        return changed > max(6, view.size // 600)
 
     def _work(self, bbox):
         try:
