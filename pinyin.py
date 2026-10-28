@@ -303,6 +303,9 @@ mei shi|没事
 dui ma|对吗
 shi ma|是吗
 you ma|有吗
+you shi ma|有事吗
+mei you shi|没有事
+wo you shi|我有事
 ke yi ma|可以吗
 zai ma|在吗
 shui le ma|睡了吗
@@ -334,6 +337,75 @@ he he|呵呵
 ha ha|哈哈
 kuai le|快乐
 zai jian le|再见了
+tou jia|偷家
+you shi|优势
+gu er che|孤儿车
+sheng sha meng|圣沙蒙
+sha meng|傻萌
+qing tan|轻坦
+zhong tan|重坦
+qiang dian|抢点
+shou dian|守点
+ya mian|亚眠
+su wa song|苏瓦松
+sheng kang tan|圣康坦
+ge la ba shan|格拉巴山
+a er gong|阿尔贡
+fan er deng|凡尔登
+suo mu he|索姆河
+pa si shang er|帕斯尚尔
+cha li jin|察里津
+a qi ba ba|阿奇巴巴
+jia li xi ya|加利西亚
+hei er ge lan|黑尔戈兰
+ze bu lv he|泽布吕赫
+a er bi en|阿尔比恩
+huang di fu|皇帝服
+lv fu|绿服
+si fu|私服
+guan fu|官服
+fu gui|服规
+pao ji|炮机
+gou dou ji|狗斗机
+gou dou|狗斗
+tan lie|坦猎
+tian di ji|舔地机
+niao niao ji|尿尿机
+ge zi che|鸽子车
+ju hua che|菊花车
+du liu che|毒瘤车
+shu tiao|薯条
+lao shu tiao|捞薯条
+zhan dian|占点
+tou dian|偷点
+ju shou|巨兽
+wu wei jian|无畏舰
+qi bo lin|齐柏林
+zhuang jia lie che|装甲列车
+qi bing|骑兵
+nao ma le|闹麻了
+bai gei|白给
+la kua|拉胯
+po fang|破防
+ni tian|逆天
+chou xiang|抽象
+shang zui lian|上嘴脸
+qi lian|骑脸
+ji le|急了
+beng bu zhu|绷不住
+nan beng|难绷
+beng bu zhu le|绷不住了
+hong wen|红温
+kai bai|开摆
+bai lan|摆烂
+niu ma|牛马
+shou shou wei|收收味
+cha bu duo de le|差不多得了
+wo cao|卧槽
+hao jia huo|好家伙
+le zi ren|乐子人
+dun bi|蹲逼
+lao liu|老六
 ni|你
 wo|我
 ta|他
